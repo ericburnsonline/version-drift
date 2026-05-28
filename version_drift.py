@@ -197,7 +197,7 @@ def ai_narrative(prompt: str, api_key: str | None) -> str:
     if not api_key:
         return "(Set ANTHROPIC_API_KEY environment variable to enable AI narratives.)"
     payload = json.dumps({
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-6",
         "max_tokens": 600,
         "messages": [{"role": "user", "content": prompt}],
     }).encode()
@@ -216,7 +216,13 @@ def ai_narrative(prompt: str, api_key: str | None) -> str:
             data = json.load(resp)
             return "".join(b.get("text", "") for b in data.get("content", []))
     except urllib.error.HTTPError as e:
-        return f"(AI narrative failed: HTTP {e.code})"
+        body = e.read().decode("utf-8", errors="ignore")
+        try:
+            detail = json.loads(body).get("error", {}).get("message", body)
+        except Exception:
+            detail = body
+        print(f"\n  [AI] HTTP {e.code} from Anthropic API: {detail}")
+        return f"(AI narrative failed: HTTP {e.code} — {detail})"
     except Exception as e:
         return f"(AI narrative failed: {e})"
 
@@ -493,6 +499,8 @@ def cmd_compare(root: Path, versions_data: list, ver_a: str, ver_b: str,
     tag     = f"v{v_from['version']}_to_v{v_to['version']}"
     out_dir = out_root / tag
     out_dir.mkdir(parents=True, exist_ok=True)
+    ai_tag  = "ai" if api_key else "no_ai"
+    report_filename = f"{tag}_{ai_tag}.txt"
     print(f"\nComparing v{v_from['version']} → v{v_to['version']}")
     print(f"Output dir: {out_dir}\n")
 
@@ -531,11 +539,47 @@ Metrics:
 - Schema diff:
 {schema_text}"""
 
-    print("Generating AI narrative …")
+    # ── check if AI report already exists ────────────────────────────────────
+    ai_report_path = out_dir / report_filename
+    if api_key and ai_report_path.exists():
+        print(f"  An AI report already exists: {report_filename}")
+        answer = input("  Regenerate AI narrative? [y/N] ").strip().lower()
+        if answer != "y":
+            print("  Skipping AI generation — existing report kept.")
+            api_key = None
+            report_filename = report_filename  # keep same name, no overwrite
+            # re-read the existing narrative for terminal display
+            existing = ai_report_path.read_text(encoding="utf-8")
+            narr_start = existing.find("AI NARRATIVE")
+            narr_end   = existing.find("─" * 10, narr_start + 20) if narr_start != -1 else -1
+            existing_narr = existing[narr_start + 20:narr_end].strip() if narr_start != -1 else ""
+            print(f"\n{'─'*60}")
+            print(f"  LoC {v_from['total_lines']:,} → {v_to['total_lines']:,}  ({loc_delta_pct:+.1f}%)")
+            print(f"  Files added: {len(added_files)}   removed: {len(removed_files)}")
+            print(f"  Schema Δ score: {s_delta['score']}")
+            print(f"{'─'*60}")
+            if existing_narr:
+                print(f"\nEXISTING NARRATIVE\n{textwrap.fill(existing_narr, 70)}\n")
+            return out_dir
+
+    # ── generate AI narrative ─────────────────────────────────────────────────
+    if api_key:
+        print("Generating AI narrative …")
     narr = ai_narrative(prompt, api_key)
+
+    # ── detect AI failure and adjust filename ─────────────────────────────────
+    ai_failed = api_key and narr.startswith("(AI narrative failed")
+    if ai_failed:
+        report_filename = f"{tag}_ai_failed.txt"
+        print(f"  AI call failed — report will be saved as {report_filename}")
 
     # ── text report ───────────────────────────────────────────────────────────
     divider = "─" * 60
+    ai_status = (
+        "yes, via Anthropic API" if (api_key and not ai_failed)
+        else "FAILED — see narrative section for details" if ai_failed
+        else "no (set ANTHROPIC_API_KEY to enable)"
+    )
     report = f"""REPOSITORY COMPARISON REPORT
 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
 {divider}
@@ -568,9 +612,10 @@ AI NARRATIVE
 EXPORTS IN THIS DIRECTORY
   file_comparison.png  — side-by-side chart
   file_changes.csv     — per-file delta table
-  report.txt           — this report
+  {report_filename}  — this report
+  AI narrative: {ai_status}
 """
-    write_report(report, out_dir / "report.txt")
+    write_report(report, out_dir / report_filename)
 
     # print summary to terminal
     print(f"\n{'─'*60}")
@@ -670,8 +715,8 @@ def main():
               python version_drift.py compare ./my_project 3.0 5.0 --out ./reports
         """),
     )
-    parser.add_argument("command", choices=["scan", "show", "compare", "overview", "full"])
-    parser.add_argument("root",    help="Root directory containing versioned subdirectories")
+    parser.add_argument("command", nargs="?", choices=["scan", "show", "compare", "overview", "full"])
+    parser.add_argument("root",    nargs="?", help="Root directory containing versioned subdirectories")
     parser.add_argument("from_ver", nargs="?", help="Start version (compare only)")
     parser.add_argument("to_ver",   nargs="?", help="End version (compare only)")
     parser.add_argument("--out",  default=None,
@@ -679,6 +724,70 @@ def main():
     parser.add_argument("--api-key", default=os.environ.get("ANTHROPIC_API_KEY"),
                         help="Anthropic API key (or set ANTHROPIC_API_KEY env var)")
     args = parser.parse_args()
+
+    # No arguments — print a friendly getting-started message
+    if not args.command:
+        script = Path(sys.argv[0]).name
+        api_status = "set ✓" if os.environ.get("ANTHROPIC_API_KEY") else "not set (narratives disabled)"
+        print(f"""
+version_drift — repository evolution analyzer
+{"─" * 56}
+GETTING STARTED
+
+  Start by pointing scan at a folder containing versioned
+  subdirectories (v1, v2.0, release-3, jobtracker_v2, etc.):
+
+    python {script} scan .
+    python {script} scan C:\\projects\\my_app
+
+COMMANDS
+  scan    <dir>              List detected version directories
+                             and suggest next steps
+
+  show    <dir>              Print a summary table of all versions
+                             (file counts, LoC, schema change scores)
+
+  compare <dir> <from> <to>  Compare two specific versions.
+                             Saves charts, CSV, and a report to:
+                             <dir>/repo_analysis/v<from>_to_v<to>/
+
+  overview <dir>             Charts + CSV across all versions
+                             without per-pair comparisons
+
+  full    <dir>              Overview + every consecutive comparison
+                             (v1→v2, v2→v3, etc.)
+
+OPTIONS
+  --out <path>               Override the output directory
+                             (default: <dir>/repo_analysis/)
+
+  --api-key <key>            Anthropic API key for AI narratives.
+                             Can also be set as an environment variable.
+
+AI NARRATIVES
+  ANTHROPIC_API_KEY is currently: {api_status}
+
+  To enable AI-written summaries of what changed and why:
+
+  Windows (current session):
+    $env:ANTHROPIC_API_KEY = "sk-ant-..."
+
+  Windows (permanent):
+    [System.Environment]::SetEnvironmentVariable(
+      "ANTHROPIC_API_KEY", "sk-ant-...", "User")
+
+  macOS / Linux:
+    export ANTHROPIC_API_KEY="sk-ant-..."
+
+  Reports are named v<from>_to_v<to>_ai.txt when a key is set,
+  and v<from>_to_v<to>_no_ai.txt when it is not.
+{"─" * 56}
+""")
+        sys.exit(0)
+
+    if not args.root:
+        print(f"Error: please provide a directory. Try: python {Path(sys.argv[0]).name} scan .")
+        sys.exit(1)
 
     root     = Path(args.root).expanduser().resolve()
     out_root = Path(args.out).resolve() if args.out else root / "repo_analysis"
