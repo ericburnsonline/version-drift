@@ -689,9 +689,42 @@ def main():
 
     if args.command == "scan":
         entries = discover_versions(root)
-        print(f"\nFound {len(entries)} versioned directories in {root}:")
+
+        # report any subdirs that were skipped
+        all_dirs = [d for d in root.iterdir() if d.is_dir()]
+        found_dirs = {e["dir"] for e in entries}
+        skipped = [d for d in all_dirs if d not in found_dirs]
+
+        if not entries:
+            print(f"\nNo versioned directories found in {root}")
+            print("\nversion_drift looks for a number in the directory name, e.g.:")
+            print("  jobtracker_v1   release-2.0   v3   snapshot_4_1")
+            if skipped:
+                print(f"\nDirectories present but not matched ({len(skipped)}):")
+                for d in sorted(skipped):
+                    print(f"  {d.name}")
+            return
+
+        print(f"\nFound {len(entries)} versioned directories in {root}:\n")
         for e in entries:
             print(f"  v{e['version']:10s}  {e['dir'].name}")
+
+        if skipped:
+            print(f"\nSkipped (no version number detected):")
+            for d in sorted(skipped):
+                print(f"  {d.name}")
+
+        if len(entries) >= 2:
+            first = entries[0]["version"]
+            last  = entries[-1]["version"]
+            mid   = entries[len(entries) // 2]["version"]
+            script = Path(sys.argv[0]).name
+            print(f"\nSuggested next steps:")
+            print(f"  python {script} show    .")
+            print(f"  python {script} compare . {first} {last}   # first → last")
+            if mid != first and mid != last:
+                print(f"  python {script} compare . {first} {mid}   # first → midpoint")
+            print(f"  python {script} full    .              # all consecutive comparisons")
         return
 
     print(f"Loading versions from {root} …")
