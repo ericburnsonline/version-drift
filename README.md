@@ -2,14 +2,14 @@
 
 A command-line tool to quantify and visualize how a software repository evolved across versions. Point it at a directory of versioned subdirectories and it produces charts, CSVs, schema diffs, and (optionally) AI-written narratives describing what changed and why it matters.
 
-> **Status: vibe coded, not yet formally tested.**
-> This tool was built with AI assistance as part of an experiment in rapid development. It works on the demo dataset it was built against, but has not been tested across a wide range of real-world repositories. Use with appropriate skepticism, and please open an issue if something breaks.
+## Status: Functional prototype
+The tool is functional and has been validated against the demo dataset it was developed with. Broader testing across varied repository structures and SQL schemas, along with automated test coverage, is still pending.
 
 ---
 
 ## Background
 
-This is one piece of a larger project — also vibe coded — where I'm using it to measure and understand the *amount* of change between successive versions of that project. Think of it as a retrospective lens on your own development velocity: how fast did the codebase grow? When did the schema stabilize? Which files absorbed the most churn?
+This tool grew out of a larger project where I wanted to measure and understand the amount of change between successive versions. Think of it as a retrospective lens on development velocity: how fast did the codebase grow? When did the schema stabilize? Which files absorbed the most churn?
 
 ---
 
